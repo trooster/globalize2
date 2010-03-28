@@ -43,15 +43,48 @@ module Globalize
       def translates(*attr_names)
         return if translates?
         options = attr_names.extract_options!
-
-        class_inheritable_accessor :translation_class, :translated_attribute_names
+        
+        # See http://globalize2.lighthouseapp.com/projects/15085/tickets/9-patch-tested-allow-to-specify-locale-as-variable#ticket-9-5
+        # for changing more locales at the same time without switching the current locale.
+        
+        attr_names.each do |name|
+          I18n.available_locales.each do |locale|
+            # Fetch field value from database
+            define_method "#{name}_#{locale}" do
+              #globalize.fetch locale, name
+              # Do not show the translated value in the field (no fallback)
+              translations.select{|t| t.locale == locale}.first.try(name)
+            end
+            # Write value to database
+            define_method "#{name}_#{locale}=" do |value|
+              value = value.blank? ? nil : value
+              globalize.write(locale, name, value)
+              #self[name] = value
+            end
+          end
+        end
+        
+        # Destroy_translation
+        class_inheritable_accessor :translation_class, :translated_attribute_names, :destroy_translation
         self.translation_class = ActiveRecord.build_translation_class(self, options)
         self.translated_attribute_names = attr_names.map(&:to_sym)
 
         include InstanceMethods
         extend  ClassMethods, Migration
 
+        # Destroy_translation
+        attr_accessible :destroy_translation
+        
+        # for each locale-field an attr_accessible
+        attr_names.each do |name|
+          I18n.available_locales.each do |locale|
+            attr_accessible "#{name}_#{locale}".to_s
+          end
+        end
+        
+
         after_save :save_translations!
+
         has_many :translations, :class_name  => translation_class.name,
                                 :foreign_key => class_name.foreign_key,
                                 :dependent   => :delete_all,
@@ -64,7 +97,6 @@ module Globalize
           conditions << "#{quoted_translation_table_name}.locale = ?"
           { :include => :translations, :conditions => [conditions.join(' AND '), locale] }
         }
-
         attr_names.each { |attr_name| translated_attr_accessor(attr_name) }
       end
 
@@ -160,6 +192,7 @@ module Globalize
         translations.scoped(:select => 'DISTINCT locale').map(&:locale)
       end
 
+      # Gives list of locales *per record*
       def translated_locales
         translations.map(&:locale)
       end
@@ -182,6 +215,26 @@ module Globalize
         translated_attribute_names.each { |name| @attributes.delete(name.to_s) }
         globalize.reset
         super(options)
+      end
+
+      # Gives an array of untranslated locales
+      def untranslated_locales
+        (I18n.available_locales - translated_locales)
+      end
+      
+      # Gives an array of untranslated locales for a field
+      def untranslated_locales_field(field)
+        (I18n.available_locales - translated_locales_field(field))
+      end
+      
+      # Translated locales for a field
+      def translated_locales_field(field)
+        translations.find(:all, :conditions => "#{field} IS NOT NULL").map(&:locale)
+      end
+      
+      # Is this a translation? (true) or fallback (false)?
+      def translated?(locale = I18n.locale)
+        translated_locales.include?(locale)
       end
 
       protected
