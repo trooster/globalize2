@@ -229,7 +229,7 @@ module Globalize
       
       # Translated locales for a field
       def translated_locales_field(field)
-        translations.find(:all, :conditions => "#{field} IS NOT NULL").map(&:locale)
+        translations.find(:all, :conditions => "#{field} IS NOT NULL", :order => "locale").map(&:locale)
       end
       
       # Is this a translation? (true) or fallback (false)?
